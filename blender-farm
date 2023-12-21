@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# Ensure that all required programs are installed
+DEPENDENCIES="file entr blender ffmpeg"
+
+for i in $DEPENDENCIES
+do
+	if ! command -v $i &>/dev/null
+	then
+		echo "Missing dependency: $i"
+		exit 1
+	fi
+done
+
+# Configurations
+FARM_PATH=${FARM_PATH:-$HOME/blender-farm}
+KILLSWITCH_FILE="$FARM_PATH/todo/kill"
+
+RENDER_FLAGS="-b -E CYCLES"
+RENDER_CYCLES_DEVICE="--cycles-device CUDA"
+RENDER_IMG_FLAGS="--render-format PNG -f 0"
+RENDER_VID_FLAGS="--render-format PNG -a"
+
+# Create the expected directory tree or ensure
+# that one exists if any of the directories have been removed
+function create_directories()
+{
+	mkdir -p $FARM_PATH/{todo,done,trash,renders}
+}
+
+# Move anything that doesn't belong into the todo directory
+# straight to the trash directory
+function clean_todo()
+{
+	local FILES="$(find $FARM_PATH/todo -type f)"
+	for i in $FILES
+	do
+		if ! file "$i" | grep -q "Blender3D"
+		then
+			mv -v $i $FARM_PATH/trash/
+		fi
+	done
+}
+
+function process_new_file()
+{
+	# Clean the todo directory
+	clean_todo
+
+	# Get all files in the TODO directory that need processing
+	local BLEND_FILES=$(find $FARM_PATH/todo -type f -iname "*.blend")
+
+	for i in $BLEND_FILES
+	do
+		echo -e "\033[32mRendering: $i\033[0m"
+
+		local FLAGS="$RENDER_FLAGS -b $i"
+
+		# Check if the file needs to be rendered as an animation
+		local TEMP_NAME="$(mktemp --dry-run $(basename $i)XXX)"
+		echo "Rendering to: $TEMP_NAME"
+		if echo $(basename $i) | grep -q "^animation_"
+		then
+			echo -e "Rendering as an animation..."
+			FLAGS="$FLAGS --render-output ${FARM_PATH}/renders/${TEMP_NAME}_####.png $RENDER_VID_FLAGS"
+		else
+			echo -e "Rendering as a picture..."
+			FLAGS="$FLAGS --render-output ${FARM_PATH}/renders/${TEMP_NAME}.png $RENDER_IMG_FLAGS"
+		fi
+
+		# Render the project
+		FLAGS="$FLAGS -- $RENDER_CYCLES_DEVICE"
+		echo "Flags: $FLAGS"
+		blender $FLAGS
+
+		# Move the project to the "done" directory
+		mv "$i" $FARM_PATH/done/
+	done
+
+	echo -e "\033[32mRendering finished! Waiting for more work to do...\033[0m"
+}
+
+while true
+do
+	# Make sure that the directory tree is created
+	create_directories
+
+	# Process new projects in the queue
+	process_new_file
+
+	echo "$FARM_PATH/todo" | entr -pdz echo "New file!"
+
+	# Check for the killswitch
+	if [ -f "$KILLSWITCH_FILE" ]
+	then
+		echo "Stopping the farm..."
+		break
+	fi
+done

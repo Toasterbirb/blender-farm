@@ -1,4 +1,4 @@
-BIN=script
+BIN=blender-farm
 PREFIX=/usr/local
 
 all:
