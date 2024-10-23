@@ -5,7 +5,7 @@ DEPENDENCIES="file entr blender ffmpeg"
 
 for i in $DEPENDENCIES
 do
-	if ! command -v $i &>/dev/null
+	if ! command -v "$i" &>/dev/null
 	then
 		echo "Missing dependency: $i"
 		exit 1
@@ -25,19 +25,20 @@ RENDER_VID_FLAGS="--render-format PNG -a"
 # that one exists if any of the directories have been removed
 function create_directories()
 {
-	mkdir -p $FARM_PATH/{todo,done,trash,renders}
+	mkdir -p "$FARM_PATH"/{todo,done,trash,renders}
 }
 
 # Move anything that doesn't belong into the todo directory
 # straight to the trash directory
 function clean_todo()
 {
-	local FILES="$(find $FARM_PATH/todo -type f)"
+	local FILES
+	FILES="$(find "$FARM_PATH/todo" -type f)"
 	for i in $FILES
 	do
 		if ! file "$i" | grep -q "Blender3D"
 		then
-			mv -v $i $FARM_PATH/trash/
+			mv -v "$i" "$FARM_PATH/trash/"
 		fi
 	done
 }
@@ -48,7 +49,8 @@ function process_new_file()
 	clean_todo
 
 	# Get all files in the TODO directory that need processing
-	local BLEND_FILES=$(find $FARM_PATH/todo -type f -iname "*.blend")
+	local BLEND_FILES
+	BLEND_FILES=$(find "$FARM_PATH/todo" -type f -iname "*.blend")
 
 	for i in $BLEND_FILES
 	do
@@ -57,12 +59,15 @@ function process_new_file()
 		local FLAGS="$RENDER_FLAGS -b $i"
 
 		# Check if the file needs to be rendered as an animation
-		local TEMP_NAME="$(mktemp --dry-run $(basename $i)XXX)"
+		local TEMP_NAME
+		TEMP_NAME="$(mktemp --dry-run "$(basename "$i")"XXX)"
+		local FPS=""
 		echo "Rendering to: $TEMP_NAME"
-		if echo $(basename $i) | grep -q "^animation_"
+		if basename "$i" | grep -q "^animation_"
 		then
 			echo -e "Rendering as an animation..."
 			FLAGS="$FLAGS --render-output ${FARM_PATH}/renders/${TEMP_NAME}_####.png $RENDER_VID_FLAGS"
+			FPS="$(basename "$i" | grep -o "^animation_[0-9]*_" | grep -o "[0-9]*")"
 		else
 			echo -e "Rendering as a picture..."
 			FLAGS="$FLAGS --render-output ${FARM_PATH}/renders/${TEMP_NAME}.png $RENDER_IMG_FLAGS"
@@ -71,10 +76,18 @@ function process_new_file()
 		# Render the project
 		FLAGS="$FLAGS -- $RENDER_CYCLES_DEVICE"
 		echo "Flags: $FLAGS"
+
+		# shellcheck disable=SC2086
 		blender $FLAGS
 
+		# If FPS was set, convert the frames into a video file with ffmpeg
+		if [ -n "$FPS" ]
+		then
+			ffmpeg -i "${FARM_PATH}/renders/${TEMP_NAME}_%04d.png" -c:v libx264 -vf "fps=$FPS,format=yuv420p" "$FARM_PATH/renders/$TEMP_NAME.mp4"
+		fi
+
 		# Move the project to the "done" directory
-		mv "$i" $FARM_PATH/done/
+		mv "$i" "$FARM_PATH/done/"
 	done
 
 	echo -e "\033[32mRendering finished! Waiting for more work to do...\033[0m"
